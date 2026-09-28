@@ -2,50 +2,44 @@ package aggregator.service;
 
 import aggregator.dto.TransactionDataDto;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
+
+import static reactor.core.publisher.Mono.zip;
 
 @Service
 public class AggregatorService {
-    private String[] ports = {"8888", "8889"};
-    private String uriHead = "http://localhost:";
-    private String uriTail = "/transactions?account=";
 
-    private final AsyncProxyService asyncProxyService;
+    private final WebClientService webClientService;
 
-    public AggregatorService(AsyncProxyService asyncProxyService) {
-        this.asyncProxyService = asyncProxyService;
+    public AggregatorService(WebClientService webClientService) {
+        this.webClientService = webClientService;
     }
 
     @Cacheable("transactions")
     public List<TransactionDataDto> queryRemoteServices(String accountId) {
-        List<TransactionDataDto[]> listResponseLists = new ArrayList<>();
-
-        for (String port : ports) {
-            String uri = uriHead + port + uriTail + accountId;
-            try {
-                CompletableFuture<TransactionDataDto[]> resultList = asyncProxyService.asyncFetchTransactions(uri);
-                if (resultList.isDone()) {
-                    resultList.
-                    listResponseLists.add(resultList.get());
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-
-        }
-        return listResponseLists.stream()
-                .flatMap(array -> Arrays.asList(array).stream())
-                .sorted(Comparator.comparing(TransactionDataDto::timestamp))
-                .toList()
-                .reversed();
+        List<TransactionDataDto[]> transactionsList = new ArrayList<>();
+        String uri1 = "http://localhost:8888/transactions?account=";
+        Mono<TransactionDataDto[]> result1 = webClientService.fetchTransactions(uri1 + accountId);
+        String uri2 = "http://localhost:8889/transactions?account=";
+        Mono<TransactionDataDto[]> result2 = webClientService.fetchTransactions(uri2 + accountId);
+        Mono
+                .zip(result1, result2)
+                .doOnSuccess(transactionsArrays -> {
+                    transactionsList.add(transactionsArrays.getT1());
+                    transactionsList.add(transactionsArrays.getT2());
+                })
+                .block();
+        return transactionsList.stream()
+                        .flatMap(Arrays::stream)
+                        .sorted(Comparator.comparing(TransactionDataDto::timestamp))
+                        .toList()
+                        .reversed();
     }
-
-
 }
